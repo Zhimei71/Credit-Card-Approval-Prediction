@@ -1,0 +1,673 @@
+---
+title: "FINAL PROJECT"
+author: "Zhimei_Chen"
+date: '2022-12-11'
+output: 
+  html_document:
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+#### Background
+Credit card is issued to the cardholder by the bank or credit card company. The cardholder does not need to pay cash for the consumption of the credit card. The payment will be made on the billing day. Unlike debit cards, general credit cards do not deduct money directly from the user's account. Therefore, people would like to choose to apply credit card. However, not every one got approved by the bank while applying credit card. Therefore, in this project, I am going to talk about what may affects the result of the application.
+
+#### GOAL:
+My goal is to predict whether the applicants can be approved with credit card under the proper background? And what conditions may be important?
+
+#### Reading Suggestion
+"START HERE" is the place where starting to split data and make models. Where if you understand the data already, or read the data before, it saves lots of time if you start reading there. <I explain how to connect two datasets from "Combine two datasets">
+
+### Libraries Needed: 
+```{r, warning=FALSE,message=FALSE,echo=FALSE}
+library(dplyr)
+library(dbplyr)
+library(tidyverse) 
+library(RColorBrewer)
+library(ggplot2)
+library(corrplot)
+library(ISLR)
+library(tidymodels)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ggpubr)
+library(kernlab)
+library(ranger)
+library(class)
+library(FNN)
+library(vip)
+tidymodels_prefer()
+```
+
+### DATA 
+#### Credit Card Approval Prediction\
+https://www.kaggle.com/datasets/rikdifos/credit-card-approval-prediction?select=application_record.csv \
+application_record.csv contains appliers personal information, which I use as features for predicting.\
+credit_record.csv records users' behaviors of credit card. \
+
+### read csv and clean
+```{r,warning=FALSE,echo=FALSE}
+options(readr.show_col_types = FALSE)
+options(tibble.width = Inf) 
+library(janitor)
+application <- read_csv("application_record.csv")%>% 
+  clean_names()
+credit <- read_csv("credit_record.csv")%>% 
+  clean_names()
+head(application)
+```
+
+### DATA: application_data
+
+#### Observations
+```{r}
+cat("Observation number in application: ", nrow(application))
+```
+
+#### turn to characters and factors and see if there are NAs
+```{r,cols.print=18,echo=FALSE}
+application2 <- application %>% 
+  mutate(id = as.character(id),
+         code_gender = factor(code_gender),
+         flag_own_car = factor(flag_own_car),
+         flag_own_realty = factor(flag_own_realty),
+         name_income_type = factor(name_income_type),
+         name_education_type = factor(name_education_type),
+         name_family_status = factor(name_family_status),
+         name_housing_type = factor(name_housing_type),
+         flag_mobil = factor(flag_mobil),
+         flag_work_phone = factor(flag_work_phone),
+         flag_phone = factor(flag_phone),
+         flag_email = factor(flag_email),
+         occupation_type = factor(occupation_type))
+
+summary(application2)
+```
+The only variable with missingness is occupation_type, which is missing 134203 observations.
+
+#### Trans NA to "Dont wanna tell"
+```{r}
+application$occupation_type[is.na(application$occupation_type)] <- "Don't wanna tell"
+```
+
+#### turn to characters and factors 
+```{r,cols.print=18,echo=FALSE}
+application <- application %>% 
+  mutate(id = as.character(id),
+         code_gender = factor(code_gender),
+         flag_own_car = factor(flag_own_car),
+         flag_own_realty = factor(flag_own_realty),
+         name_income_type = factor(name_income_type),
+         name_education_type = factor(name_education_type),
+         name_family_status = factor(name_family_status),
+         name_housing_type = factor(name_housing_type),
+         flag_mobil = factor(flag_mobil),
+         flag_work_phone = factor(flag_work_phone),
+         flag_phone = factor(flag_phone),
+         flag_email = factor(flag_email),
+         occupation_type = factor(occupation_type))
+head(application)
+```
+
+
+#### Variables
+**id**:	Client number\
+**code_gender**: Gender [M,F]\
+**flag_own_car**: Is there a car [N,Y]\
+**flag_own_realty**: Is there a property [N,Y]\
+**cnt_children**: Number of children\
+**amt_income_total**: Annual income\
+**name_income_type**: Income category [Commercial associate, Pensioner, State servant,  Student, Working]\
+**name_education_type**: Education level [Academic degree, Higher education, Incomplete higher, Lower secondary, Secondary / secondary special]\
+**name_family_status**: Marital status [Civil marriage, Married, Separated, Single / not married, Widow]\
+**name_housing_type**: Way of living [Co-op apartment, House / apartment, Municipal apartment, Office apartment, Rented apartment, With parents]\
+**days_birth**: Birthday	Count backwards from current day (0), -1 means yesterday\
+**days_employed**: Start date of employment	Count backwards from current day(0). If positive, it means the person currently unemployed.\
+**flag_mobile**: Is there a mobile phone [0,1]	\
+**flag_work_phone**: Is there a work phone [0,1]\
+**flag_phone**: Is there a phone	[0,1]\
+**flag_email**: Is there an email	[0,1]\
+**occupation_type**: Occupation	[Laborers, Core staff, Sales staff, Managers, Drivers, (Other) , NA's]\
+**cnt_fam_members**: Family size	\
+
+#### trans inappropriate days of employees to 0 days
+```{r}
+application$days_employed[application$days_employed==0] ##no one get 0 days
+head(application$days_employed[application$days_employed>0])
+#Therefore, I think who don't have work has assigned as "365243" days
+#trans the number of inappropriate days of employees to 0 days
+application$days_employed[application$days_employed == 365243] <- 0
+```
+
+### DATA: credit_data
+```{r}
+head(credit)
+summary(credit)
+```
+There is no missing data in credit.
+
+#### Variables
+id: Client number	\
+months_balance: Record month	The month of the extracted data is the starting point, backwards, 0 is the current month, -1 is the previous month, and so on\
+status: Status (*more in "transfer status"*)
+
+
+#### Observations
+```{r}
+cat("Observation number in credit: ",nrow(credit))
+```
+#### transfer status 
+0: 1-29 days past due --> 1\
+1: 30-59 days past due --> 2\
+2: 60-89 days overdue --> 3\
+3: 90-119 days overdue --> 4\
+4: 120-149 days overdue --> 5\
+5: Overdue or bad debts, write-offs for more than 150 days --> 6\
+C: paid off that month --> 0\
+X: No loan for the month --> 0
+```{r,echo=FALSE}
+credit_needed <- credit
+credit_needed$id <- as.character(credit_needed$id)
+credit_needed$status<- as.character(credit_needed$status)
+
+credit_needed$status[credit_needed$status == "5"] <- 6
+credit_needed$status[credit_needed$status == "4"] <- 5
+credit_needed$status[credit_needed$status == "3"] <- 4
+credit_needed$status[credit_needed$status == "2"] <- 3
+credit_needed$status[credit_needed$status == "1"] <- 2
+credit_needed$status[credit_needed$status == "0"] <- 1
+credit_needed$status[credit_needed$status == "C"] <- 0
+credit_needed$status[credit_needed$status == "X"] <- 0
+
+head(credit_needed)
+```
+
+#### turn to factors
+```{r,cols.print=18}
+credit_needed <- credit_needed %>% 
+  mutate(status = factor(status))
+head(credit_needed)
+```
+
+first year credit
+```{r}
+first_year_credit <- credit_needed %>%
+             arrange(id,months_balance,status) %>%
+             group_by(id) %>%
+             slice(1:12) %>%
+             mutate(month = seq(1:length(id)))
+           
+head(first_year_credit)
+```
+
+### Combine two datasets
+
+#### How we combine?
+Example
+
+An example here who, with ID: 5008805, applied credit card and had been approved.
+```{r,warning=FALSE}
+first_year_credit[first_year_credit$id == 5008805,]
+credit[credit$id == 5008805,]
+application[application$id == 5008805,]
+```
+
+Therefore, we can combine application data with first year, first month credit data
+```{r}
+cat("Unique ID in first year credit: ", length(unique(first_year_credit$id)), "and in credit: ", length(unique(credit$id)))
+cat("Unique ID in application: ", length(unique(application$id)))
+
+has_credit <- merge(application, first_year_credit, 
+                  by.x = "id", by.y = "id")
+cat(length(unique(has_credit$id)),"people has credit card with Info here.")
+
+first_month <- has_credit %>%
+  filter(month == min(month))
+```
+
+#### Observe - graphs
+
+those had been approved's information (numbers)
+```{r,echo=FALSE}
+numchr <- first_month %>%
+  ggplot(aes(x = cnt_children)) +
+  geom_boxplot(fill="darkturquoise")+
+  ggtitle("Amount of children")
+income <- first_month %>%
+  ggplot(aes(x = amt_income_total)) +
+  geom_boxplot(fill="darkturquoise")+
+  ggtitle("Annual income")
+age <- first_month %>%
+  ggplot(aes(x = abs(days_birth)/365))+
+  geom_boxplot(fill="darkturquoise")+
+  ggtitle("Age")
+employedyear <- first_month %>%
+  ggplot(aes(x = abs(days_employed)/365))+
+  geom_boxplot(fill="darkturquoise")+
+  ggtitle("Years been Employeed")
+ctfmem <- first_month %>%
+  ggplot(aes(x = cnt_fam_members)) +
+  geom_boxplot(fill="darkturquoise")+
+  ggtitle("Amount of family members")
+ggarrange(numchr, income, age, employedyear, ctfmem, 
+          nrow = 3,ncol=2,
+          labels = c('a', 'b','c','d','e'))
+```
+
+those had been approved's information (factors - YES/NO)
+```{r,echo=FALSE}
+gender <- first_month %>%
+  ggplot(aes(x = code_gender)) +
+  geom_bar(fill="darkturquoise", stat = "count") +
+  ggtitle("Gender")
+iscar <- first_month %>%
+  ggplot(aes(x = flag_own_car)) +
+  geom_bar(fill="darkturquoise", stat = "count")+
+  ggtitle("Has car?")
+isrealty <- first_month %>%
+  ggplot(aes(x = flag_own_realty)) +
+  geom_bar(fill="darkturquoise", stat = "count")+
+  ggtitle("Has realty?")
+ismobile <- first_month %>%
+  ggplot(aes(x = flag_mobil)) +
+  geom_bar(fill="darkturquoise", stat = "count")+
+  ggtitle("Has mobile?")
+isworkphone <- first_month %>%
+  ggplot(aes(x = flag_work_phone)) +
+  geom_bar(fill="darkturquoise", stat = "count")+
+  ggtitle("Has work phone?")
+isphone <- first_month %>%
+  ggplot(aes(x = flag_phone)) +
+  geom_bar(fill="darkturquoise", stat = "count")+
+  ggtitle("Has phone?")
+isemail <- first_month %>%
+  ggplot(aes(x = flag_email)) +
+  geom_bar(fill="darkturquoise", stat = "count")+
+  ggtitle("Has email?")
+
+ggarrange(gender, iscar, isrealty, ismobile,isworkphone, isphone, isemail,
+          nrow = 2,ncol=4,
+          labels = c('a', 'b','c','d','e','f','g'))
+```
+
+those had been approved's information (factors - REST)
+```{r,echo=FALSE}
+inctype <- first_month %>%
+  ggplot(aes(x = name_income_type)) +
+  geom_bar(fill="darkturquoise", stat = "count") +
+  coord_flip() +
+  ggtitle("Name Income Type")
+inctype
+edutype <- first_month %>%
+  ggplot(aes(x = name_education_type)) +
+  geom_bar(fill="darkturquoise", stat = "count") +
+  coord_flip() +
+  ggtitle("Name Education Type")
+edutype
+houtype <- first_month %>%
+  ggplot(aes(x = name_housing_type)) +
+  geom_bar(fill="darkturquoise", stat = "count") +
+  coord_flip() +
+  ggtitle("Name Housing Type")
+houtype
+occtype <- first_month %>%
+  ggplot(aes(x = occupation_type)) +
+  geom_bar(fill="darkturquoise")+
+  coord_flip() +
+  ggtitle("Occupation Type")
+occtype
+```
+
+#### Compare numbers of ID
+```{r}
+cat(length(unique(first_year_credit$id)), 
+length(unique(credit$id)),
+length(unique(application$id)),
+length(unique(first_month$id)))
+```
+##### My understanding to this data is according to the 45985 people who have credit cards, 36457 people from those 45985 people are applied with recording the backgrounds. The bank issued credit cards to those 36457 people from 438510 applicants.
+
+#### Combine and add our y
+```{r,warning=FALSE}
+mydata1<-application%>%
+  filter(! id %in% first_month$id)%>%
+  mutate(get_credit_card=FALSE)
+mydata2<-application%>%
+  filter(id %in% first_month$id)%>%
+  mutate(get_credit_card=TRUE)
+mydata<-rbind(mydata1,mydata2)
+summary(mydata$get_credit_card)
+```
+There are 402053 people who do not have credit card, while the other 36457 people have.
+
+```{r,warning=FALSE}
+cat(length(unique(mydata$id)),"is less than",nrow(mydata))
+```
+Finding out there are duplicated rows in mydata, since when unique id should be 43510, where we have 438557 rows of mydata, so I remove them: 
+
+#### Remove duplicated rows & turn logistics to factors
+```{r}
+mydata<-mydata[!duplicated(mydata$id),]
+mydata$get_credit_card<-as.factor(mydata$get_credit_card)
+```
+
+### START HERE!
+
+### Split Data
+```{r}
+set.seed(3435)
+mydata_split <- initial_split(mydata, prop = 0.7, strata = get_credit_card)
+mydata_train <- training(mydata_split)
+mydata_test <- testing(mydata_split)
+dim(mydata_train)
+dim(mydata_test)
+mydata_folds <- vfold_cv(data = mydata_train, v = 5, strata = get_credit_card)
+```
+
+### Correlation Matrix
+Using the training data set, I create a correlation matrix of all continuous variables. 
+
+```{r}
+mydata_train %>% 
+  select(is.numeric) %>% 
+  cor(use = "complete.obs") %>% 
+  corrplot.mixed(upper='pie')
+```
+
+### KNN
+```{r}
+# YTrain is the true labels for get_credit_card on the training set 
+# XTrain is the standardized design matrix, x has to be numeric
+YTrain = mydata_train$get_credit_card
+XTrain = mydata_train %>% 
+  select(cnt_children, amt_income_total, days_birth, days_employed,
+         cnt_fam_members) %>% 
+  scale(center = TRUE, scale = TRUE)
+
+# YTest is the true labels for High on the test set, Xtest is the design matrix
+YTest = mydata_test$get_credit_card
+XTest = mydata_test %>% 
+  select(cnt_children, amt_income_total, days_birth, days_employed,
+         cnt_fam_members) %>% 
+  scale(center = TRUE, scale = TRUE)
+```
+
+#### In Train
+```{r knn train}
+set.seed(444)
+
+# knn - train the classifier and make predictions on the TRAINING set!
+pred.Ytrain.k2 = FNN:: knn(train=XTrain, test=XTrain, cl=YTrain, k=2)
+
+# Get confusion matrix
+conf_train = table(predicted=pred.Ytrain.k2, true=YTrain)
+conf_train
+
+# Trainning mean squared error rate
+1 - sum(diag(conf_train)/sum(conf_train))
+```
+
+#### In Test
+```{r knn test}
+set.seed(555)
+
+# knn - train the classifier on TRAINING set and make predictions on TEST set!
+pred.YTest.k2 = FNN::knn(train=XTrain, test=XTest, cl=YTrain, k=2)
+
+# Get confusion matrix
+conf_test = table(predicted=pred.YTest.k2, true=YTest)
+conf_test
+
+# Test mean squared error rate
+1 - sum(diag(conf_test)/sum(conf_test))
+```
+#### Conclusion
+Both error rates in train and test are low, it's nice. However, we can only use numeric variables for predictors in KNN model, so I use other predictors in the following models.
+
+### Recipe
+```{r}
+recipe <- recipe(get_credit_card ~ code_gender + flag_own_car + flag_own_realty
+                  + amt_income_total + name_income_type + name_education_type +
+                   name_family_status + name_housing_type + cnt_fam_members, 
+                 data = mydata_train) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_predictors())
+```
+
+### Logistic Regression Model
+```{r,warning=FALSE}
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+log_wkflow <- workflow() %>% 
+  add_model(log_reg) %>% 
+  add_recipe(recipe)
+
+log_fit <- fit(log_wkflow, mydata_train)
+```
+
+#### Accuracy
+Generate predictions using logistic regression model and training data
+```{r}
+predict(log_fit, new_data = mydata_train, type = "class") %>% 
+  bind_cols(mydata_train %>% select(get_credit_card)) %>% 
+  accuracy(truth = get_credit_card, estimate = .pred_class)
+```
+
+#### Fit the model to the testing data
+```{r,warning=FALSE}
+log_test <- fit(log_wkflow, mydata_test)
+predict(log_test, new_data = mydata_test, type = "class") %>% 
+  bind_cols(mydata_test %>% select(get_credit_card)) %>% 
+  accuracy(truth = get_credit_card, estimate = .pred_class)
+```
+
+#### Heatmap
+```{r}
+augment(log_test, new_data = mydata_test) %>%
+  conf_mat(truth = get_credit_card, estimate = .pred_class) %>% 
+  autoplot(type = "heatmap")
+```
+
+#### ROC Curve
+```{r}
+augment(log_test, new_data = mydata_test) %>%
+  roc_curve(get_credit_card, .pred_FALSE) %>%
+  autoplot()
+```
+
+### Decision Tree Model
+```{r}
+tree_spec <- decision_tree() %>%
+  set_engine("rpart")
+
+class_tree_spec <- tree_spec %>%
+  set_mode("classification")
+
+class_tree_wf <- workflow() %>%
+  add_model(class_tree_spec %>% set_args(cost_complexity = tune())) %>%
+  add_recipe(recipe)
+```
+
+####tune & autoplot
+```{r}
+param_grid <- grid_regular(cost_complexity(range = c(-5, 5)), levels = 5)
+
+tune <- tune_grid(class_tree_wf, 
+                  resamples = mydata_folds, 
+                  grid = param_grid, 
+                  metrics = metric_set(roc_auc))
+autoplot(tune)
+```
+#### Best-performing pruned decision tree
+```{r}
+tune %>%
+  collect_metrics()%>%
+  arrange(desc(mean))%>%
+  slice(1)
+```
+
+#### Rpart-Plot
+```{r,warning=FALSE}
+best_complexity <- select_best(tune, matric = 'roc_auc')
+class_tree_final <- finalize_workflow(class_tree_wf, best_complexity)
+class_tree_final_fit <- fit(class_tree_final, data = mydata_test)
+
+class_tree_final_fit %>%
+  extract_fit_engine() %>%
+  rpart.plot()
+```
+It is overfitting. 
+
+### SVM
+#### Plot
+```{r}
+ggplot(mydata_train, aes(amt_income_total, name_housing_type, 
+                         color = get_credit_card)) +
+  geom_point()
+```
+SVM works too slow so I take less train data and test data to fit this model.
+
+#### Split Data2
+```{r}
+set.seed(3435)
+mydata2 <- sample_frac(mydata,0.01)
+  
+mydata_split2 <- initial_split(mydata2, prop = 0.7, strata = get_credit_card)
+mydata_train2 <- training(mydata_split2)
+mydata_test2 <- testing(mydata_split2)
+dim(mydata_train2)
+dim(mydata_test2)
+mydata_folds2 <- vfold_cv(data = mydata_train2, v = 5, strata = get_credit_card)
+```
+
+#### recipe2
+(Only change the size of the data)
+```{r}
+recipe2 <- recipe(get_credit_card ~ code_gender + flag_own_car + flag_own_realty
+                  + amt_income_total + name_income_type + name_education_type +
+                   name_family_status + name_housing_type + cnt_fam_members, 
+                 data = mydata_train2) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_normalize(all_predictors())
+```
+
+#### model & workflow
+```{r}
+svm_linear_spec <- svm_poly(degree = 1) %>%
+ set_mode("classification") %>%
+ set_engine("kernlab", scaled = FALSE)
+
+svm_linear_wf <- workflow() %>%
+ add_model(svm_linear_spec %>% set_args(cost = tune())) %>%
+ add_recipe(recipe2)
+
+param_grid <- grid_regular(cost(), levels = 10)
+```
+
+#### tune
+```{r}
+tune_svm<- tune_grid(
+ svm_linear_wf, 
+ resamples = mydata_folds2, 
+ grid = param_grid
+)
+autoplot(tune_svm)
+```
+
+#### Select the Best 
+```{r,warning=FALSE}
+best_cost <- select_best(tune_svm, metric = "accuracy")
+svm_linear_final <- finalize_workflow(svm_linear_wf, best_cost)
+svm_linear_fit <- svm_linear_final %>% fit(mydata_train2)
+```
+
+#### Fit to test
+```{r}
+augment(svm_linear_fit, new_data = mydata_test2) %>%
+ conf_mat(truth = get_credit_card, estimate = .pred_class)
+```
+It predicts everything FALSE, so that this model is not good.
+
+### Random Forest Model
+```{r}
+forest_spec <- rand_forest() %>%
+  set_engine("ranger", importance = 'impurity')%>%
+  set_mode('classification')%>%
+  set_args(mtry=tune(),trees=tune(),min_n=tune())
+
+forest_wf<-workflow()%>%
+  add_model(forest_spec)%>%
+  add_recipe(recipe2)
+```
+
+#### grid
+```{r}
+grid<- grid_regular(mtry(range= c(1,9)),
+                          trees(range = c(200,1000)),
+                           min_n(range = c(5,20)),
+                          levels = 3)
+```
+
+#### tune
+```{r,warning=FALSE}
+library(ranger)
+tune_forest<-tune_grid(
+  forest_wf,
+  resamples=mydata_folds2,
+  gird=grid,
+  metric=metric_set(roc_auc))
+autoplot(tune_forest)
+```
+
+The main limitation of random forest is that a large number of trees can make the algorithm too slow and ineffective for real-time predictions. It takes almost an hour to do 6/10 of this step. Therefore, as SVM model, I choose 1 percent of the whole data to fit.
+
+#### select best random forest
+```{r,warning=FALSE}
+best_forest<-select_best(tune_forest,metric = "roc_auc")
+forest_final<-finalize_workflow(forest_wf,best_forest)
+final_fit<-fit(forest_final,mydata_train2)
+
+final_fit %>%
+  extract_fit_engine() %>%
+  vip()
+```
+Variable amt_income_total (amount of year income) is the most useful.
+
+### Conclusion
+#### Approach GOAL?
+Recall: My goal is to predict whether the applicants can be approved with credit card under the proper background? And what conditions may be important?\
+I think my models are not that good to predict whether the applicants can be approved under the background, though some of the models did better than others. And the numeric conditions are more important because the KNN model uses only numeric variables and it works the best.
+
+#### Models
+
+##### KNN
+KNN works good because both mean squared errors for train data and test data are small. 
+
+##### Logistic Regression
+Though the accuracy is about 0.91, I think this model is not good enough. The number looks good just because of there are many people got rejected from the application. ROC curve shows that it is not good enough. 
+
+##### Decision Tree
+Decision Tree is not good enough because it is too much overriding. A good decision tree should between underiding and overriding. The situation of a small change in the data can cause a large change in the structure of the decision tree causing instability happens in my model.
+
+##### SVM
+It takes too long, so I take 1 percent of the original data to do. The model directly predict everything FALSE, which why I think it is not good.
+
+##### Random Forest Tree
+I finished the code for random Forest Tree, but it is too big, where I take 1 percent of the original data to do as SVM. I got that variable amt_income_total (amount of year income) is the most useful.
+
+#### Possible Reasons & May Improved in the future:
+Why some models are not good?\
+  TOO MANY useless predictors. There are too many predictors which make the model not accurate enough. Therefore, I will try to make fewer predictors to make the models fit better.\
+
+
+
+
